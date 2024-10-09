@@ -1,0 +1,88 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+
+#define MAX_COMMANDS 10
+#define MAX_ARGS 10
+#define MAX_LEN 100
+
+void execute_pipeline(char *commands[MAX_COMMANDS][MAX_ARGS], int num_commands) {
+    int pipe_fds[MAX_COMMANDS - 1][2];
+    pid_t pids[MAX_COMMANDS];
+
+    for (int i = 0; i < num_commands - 1; i++) {
+        if (pipe(pipe_fds[i]) == -1) {
+            perror("pipe");
+            exit(1);
+        }
+    }
+
+    for (int i = 0; i < num_commands; i++) {
+        pids[i] = fork();
+        if (pids[i] == -1) {
+            perror("fork");
+            exit(1);
+        }
+
+        if (pids[i] == 0) {  // Child process
+            if (i > 0) {  // Redirect stdin from the previous pipe if not the first command
+                dup2(pipe_fds[i - 1][0], STDIN_FILENO);
+            }
+            if (i < num_commands - 1) {  // Redirect stdout to the next pipe if not the last command
+                dup2(pipe_fds[i][1], STDOUT_FILENO);
+            }
+
+            // Close all pipe file descriptors
+            for (int j = 0; j < num_commands - 1; j++) {
+                close(pipe_fds[j][0]);
+                close(pipe_fds[j][1]);
+            }
+
+            // Execute the command
+            execvp(commands[i][0], commands[i]);
+            perror("execvp");
+            exit(1);
+        }
+    }
+
+    // Close all pipe file descriptors in the parent
+    for (int i = 0; i < num_commands - 1; i++) {
+        close(pipe_fds[i][0]);
+        close(pipe_fds[i][1]);
+    }
+
+    // Wait for all child processes to finish
+    for (int i = 0; i < num_commands; i++) {
+        waitpid(pids[i], NULL, 0);
+    }
+}
+
+int main() {
+    char input[MAX_LEN];
+    char *commands[MAX_COMMANDS][MAX_ARGS];
+    int num_commands = 0;
+
+    printf("Enter commands separated by '|':\n");
+    fgets(input, MAX_LEN, stdin);
+
+    // Parse the input into commands and arguments
+    char *command = strtok(input, "|");
+    while (command != NULL && num_commands < MAX_COMMANDS) {
+        int arg_count = 0;
+        commands[num_commands][arg_count] = strtok(command, " \n");
+        while (commands[num_commands][arg_count] != NULL && arg_count < MAX_ARGS - 1) {
+            arg_count++;
+            commands[num_commands][arg_count] = strtok(NULL, " \n");
+        }
+        commands[num_commands][arg_count] = NULL;  // Null-terminate the argument list
+        num_commands++;
+        command = strtok(NULL, "|");
+    }
+
+    execute_pipeline(commands, num_commands);
+
+    return 0;
+}
